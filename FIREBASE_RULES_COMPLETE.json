@@ -1,0 +1,51 @@
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid",
+        "points": {
+          ".read": "$uid === auth.uid",
+          ".write": "$uid === auth.uid"
+        }
+      }
+    },
+    "carts": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
+      }
+    },
+    "products": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "orders": {
+      ".read": "auth != null",
+      "$orderId": {
+        ".read": "auth != null && (!data.exists() || data.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
+        ".write": "auth != null && (newData.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
+        "status": {
+          ".read": "auth != null && (root.child('orders').child($orderId).child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
+          ".write": "auth != null && (root.child('orders').child($orderId).child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')"
+        }
+      }
+    },
+    "numericId_to_uid": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "coupons": {
+      ".read": "auth != null",
+      "$couponCode": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "timesUsed": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    }
+  }
+}
+

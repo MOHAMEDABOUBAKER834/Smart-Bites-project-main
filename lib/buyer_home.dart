@@ -55,6 +55,8 @@ class _BuyerHomeState extends State<BuyerHome> {
       'cancel': 'إلغاء',
       'add_to_cart': 'أضف للسلة',
       'total': 'الإجمالي',
+      'error': 'خطأ',
+      'order_received': 'تم تأكيد استلام الطلب!',
     },
     'en': {
       'welcome': 'Welcome,',
@@ -78,6 +80,8 @@ class _BuyerHomeState extends State<BuyerHome> {
       'cancel': 'Cancel',
       'add_to_cart': 'Add to Cart',
       'total': 'Total',
+      'error': 'Error',
+      'order_received': 'Order confirmed!',
     }
   };
 
@@ -97,6 +101,22 @@ class _BuyerHomeState extends State<BuyerHome> {
         _searchQuery = _searchController.text;
       });
     });
+    // Suppress Firestore errors since we're using Realtime Database
+    _suppressFirestoreErrors();
+  }
+
+  void _suppressFirestoreErrors() {
+    // Firestore may not be set up, but we use Realtime DB, so suppress errors
+    // This prevents Firestore connection errors from appearing in logs
+    try {
+      _firestore.settings = const Settings(
+        persistenceEnabled: false,
+        cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+      );
+    } catch (e) {
+      // Ignore Firestore setup errors - we're using Realtime Database
+      // Firestore errors won't affect order confirmation since we use Realtime DB
+    }
   }
 
   void _fetchUserData() async {
@@ -136,7 +156,7 @@ class _BuyerHomeState extends State<BuyerHome> {
           orders.forEach((key, value) {
             final orderData = Map<String, dynamic>.from(value as Map);
             final status = orderData['status'] as String?;
-            if (status == 'Pending' || status == 'Delivered') {
+            if (status == 'Pending' || status == 'Ready' || status == 'Delivered') {
               final timestamp = (orderData['createdAt'] as num?)?.toInt() ?? 0;
               if (timestamp > latestTimestamp) {
                 latestTimestamp = timestamp;
@@ -258,6 +278,8 @@ class _BuyerHomeState extends State<BuyerHome> {
       return;
     }
     print('User ID: ${user.uid}');
+    print('User email: ${user.email}');
+    print('User is authenticated: ${user.uid.isNotEmpty}');
     
     // Get price from Firestore product (price field)
     int totalPoints = ((product['price'] as num?)?.toInt() ?? 0);
@@ -270,6 +292,8 @@ class _BuyerHomeState extends State<BuyerHome> {
         : '$productKey-${selectedSauces.map((s) => s['id']).join('-')}';
 
     final cartRef = FirebaseDatabase.instance.ref('carts/${user.uid}/$cartItemKey');
+    final cartPath = 'carts/${user.uid}/$cartItemKey';
+    print('Cart path: $cartPath');
     
     // Get product name (string in Firestore)
     final productName = product['name'] ?? 'Unknown Product';
@@ -296,9 +320,20 @@ class _BuyerHomeState extends State<BuyerHome> {
       }
     }
     
-    cartRef.runTransaction((Object? currentData) {
-      if (currentData == null) {
-        return Transaction.success({
+    // First, try to read the current cart item
+    cartRef.once().then((DatabaseEvent snapshot) {
+      Map<String, dynamic> cartItemData;
+      
+      if (snapshot.snapshot.exists) {
+        // Item exists, increment quantity
+        final currentData = Map<String, dynamic>.from(snapshot.snapshot.value as Map);
+        cartItemData = {
+          ...currentData,
+          'quantity': ((currentData['quantity'] as num?)?.toInt() ?? 0) + 1,
+        };
+      } else {
+        // Item doesn't exist, create new
+        cartItemData = {
           'name': {
             'ar': productName,
             'en': productName,
@@ -308,11 +343,11 @@ class _BuyerHomeState extends State<BuyerHome> {
           'quantity': 1,
           'category': categoryMap,
           'selectedSauces': selectedSauces,
-        });
+        };
       }
-      final data = Map<String, dynamic>.from(currentData as Map);
-      data ['quantity'] = (data['quantity'] ?? 0) + 1;
-      return Transaction.success(data);
+      
+      // Write the updated data
+      return cartRef.set(cartItemData);
     }).then((_) {
       print('Product added to cart successfully');
       print('Cart item key: $cartItemKey');
@@ -335,21 +370,70 @@ class _BuyerHomeState extends State<BuyerHome> {
       }
     }).catchError((error) {
       print('Error adding to cart: $error');
+      print('Error type: ${error.runtimeType}');
       print('Error stack: ${error.stackTrace}');
+      print('Cart path attempted: $cartPath');
+      print('User UID: ${user.uid}');
+      
+      String errorMessage = '${loc['error']!}: Failed to add to cart';
+      if (error.toString().contains('permission-denied')) {
+        errorMessage = '${loc['error']!}: Permission denied. Please check Firebase security rules.';
+      } else {
+        errorMessage = '${loc['error']!}: $error';
+      }
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${loc['error']!}: Failed to add to cart - $error'),
+          content: Text(errorMessage),
           backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 5),
         ));
       }
     });
   }
 
-  void _confirmOrderReceived() {
+  void _confirmOrderReceived() async {
     if (_currentOrder != null && _currentOrder!['key'] != null) {
       final orderKey = _currentOrder!['key'];
-      FirebaseDatabase.instance.ref('orders/$orderKey/status').set('Completed');
+      print('Confirming order receipt for order: $orderKey');
+      try {
+        // Use Realtime Database only - Firestore errors won't affect this
+        final orderRef = _database.ref('orders/$orderKey/status');
+        await orderRef.set('Completed');
+        print('Order status updated to Completed successfully');
+        
+        if (mounted) {
+          final langCode = Provider.of<LanguageProvider>(context, listen: false).currentLocale.languageCode;
+          final loc = _localizations[langCode]!;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(loc['order_received'] ?? 'Order confirmed!'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+          
+          // Clear the current order from state after confirmation
+          setState(() {
+            _currentOrder = null;
+          });
+        }
+      } catch (e) {
+        print('Error confirming order receipt: $e');
+        if (mounted) {
+          final langCode = Provider.of<LanguageProvider>(context, listen: false).currentLocale.languageCode;
+          final loc = _localizations[langCode]!;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${loc['error']!}: ${e.toString()}'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } else {
+      print('Cannot confirm order: _currentOrder is null or missing key');
     }
   }
 
@@ -573,6 +657,7 @@ class _BuyerHomeState extends State<BuyerHome> {
 
     final status = _currentOrder!['status'] ?? 'Pending';
     final isPending = status == 'Pending';
+    final isReady = status == 'Ready';
 
     final cardColor = isPending ? Colors.amber.shade100 : Colors.green.shade100;
     final iconColor = isPending ? Colors.amber.shade800 : Colors.green.shade800;
@@ -608,7 +693,7 @@ class _BuyerHomeState extends State<BuyerHome> {
             const SizedBox(height: 4),
             Text(statusText, style: TextStyle(color: iconColor.withOpacity(0.8))),
             
-            if (!isPending) ...[
+            if (isReady) ...[
               const Divider(height: 20),
               Text(loc['confirm_receipt']!, style: TextStyle(color: iconColor)),
               const SizedBox(height: 8),

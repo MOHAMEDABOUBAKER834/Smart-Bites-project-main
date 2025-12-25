@@ -16,16 +16,36 @@ class SellerDashboard extends StatefulWidget {
   State<SellerDashboard> createState() => _SellerDashboardState();
 }
 
-class _SellerDashboardState extends State<SellerDashboard> {
+class _SellerDashboardState extends State<SellerDashboard> with SingleTickerProviderStateMixin {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseDatabase _database = FirebaseDatabase.instance;
+  late TabController _tabController;
+  Stream<DatabaseEvent>? _ordersStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    // Create a broadcast stream to avoid "Stream has already been listened to" error
+    // Use onValue without orderByChild to avoid index requirements
+    _ordersStream = _database.ref('orders').onValue.asBroadcastStream();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   static const Map<String, Map<String, String>> _localizations = {
     'ar': {
       'dashboard_title': 'لوحة تحكم البائع',
       'my_products': 'منتجاتي',
+      'orders': 'الطلبات',
       'add_new_product': 'إضافة منتج جديد',
       'no_products': 'لا توجد منتجات حتى الآن',
+      'no_orders': 'لا توجد طلبات حتى الآن',
       'edit': 'تعديل',
       'delete': 'حذف',
       'out_of_stock': 'نفذت الكمية',
@@ -36,12 +56,27 @@ class _SellerDashboardState extends State<SellerDashboard> {
       'product_deleted': 'تم حذف المنتج بنجاح',
       'product_updated': 'تم تحديث حالة المنتج',
       'error': 'حدث خطأ',
+      'order_id': 'طلب رقم',
+      'status': 'الحالة',
+      'pending': 'قيد التجهيز',
+      'ready': 'جاهز',
+      'completed': 'مكتمل',
+      'mark_ready': 'تم التجهيز',
+      'mark_ready_confirmation': 'هل أنت متأكد من أن الطلب جاهز؟',
+      'order_ready_success': 'تم تحديث حالة الطلب إلى جاهز',
+      'total_points': 'إجمالي النقاط',
+      'customer': 'العميل',
+      'items': 'العناصر',
+      'notes': 'ملاحظات',
+      'created_at': 'تاريخ الطلب',
     },
     'en': {
       'dashboard_title': 'Seller Dashboard',
       'my_products': 'My Products',
+      'orders': 'Orders',
       'add_new_product': 'Add New Product',
       'no_products': 'No products yet',
+      'no_orders': 'No orders yet',
       'edit': 'Edit',
       'delete': 'Delete',
       'out_of_stock': 'Out of Stock',
@@ -52,8 +87,417 @@ class _SellerDashboardState extends State<SellerDashboard> {
       'product_deleted': 'Product deleted successfully',
       'product_updated': 'Product status updated',
       'error': 'An error occurred',
+      'order_id': 'Order',
+      'status': 'Status',
+      'pending': 'Pending',
+      'ready': 'Ready',
+      'completed': 'Completed',
+      'mark_ready': 'Mark as Ready',
+      'mark_ready_confirmation': 'Are you sure the order is ready?',
+      'order_ready_success': 'Order status updated to Ready',
+      'total_points': 'Total Points',
+      'customer': 'Customer',
+      'items': 'Items',
+      'notes': 'Notes',
+      'created_at': 'Order Date',
     }
   };
+
+  Widget _buildProductsTab(Map<String, String> loc, user) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: ElevatedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ProductFormScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.add),
+            label: Text(loc['add_new_product']!),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.deepOrange,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 50),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              loc['my_products']!,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: StreamBuilder<QuerySnapshot>(
+            stream: _firestore
+                .collection('products')
+                .where('sellerId', isEqualTo: user.uid)
+                .orderBy('createdAt', descending: true)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                return Center(
+                  child: Text(
+                    loc['no_products']!,
+                    style: const TextStyle(fontSize: 16, color: Colors.grey),
+                  ),
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.all(16.0),
+                itemCount: snapshot.data!.docs.length,
+                itemBuilder: (context, index) {
+                  final doc = snapshot.data!.docs[index];
+                  final product = doc.data() as Map<String, dynamic>;
+                  final productId = doc.id;
+                  final isOutOfStock = product['isOutOfStock'] ?? false;
+
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12.0),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.all(12.0),
+                      leading: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: _buildProductImage(product),
+                      ),
+                      title: Text(
+                        product['name'] ?? 'No Name',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 4),
+                          Text('${loc['in_stock']!}: ${product['price'] ?? 0} ${loc['in_stock']!.contains('Points') ? '' : 'EGP'}'),
+                          if (product['description'] != null)
+                            Text(
+                              product['description'] as String,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Switch(
+                            value: isOutOfStock,
+                            onChanged: (value) {
+                              _updateProductStatus(productId, value);
+                            },
+                            activeColor: Colors.red,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.edit, color: Colors.blue),
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ProductFormScreen(
+                                    productId: productId,
+                                    initialProduct: product,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete, color: Colors.red),
+                            onPressed: () => _showDeleteConfirmation(context, productId, loc),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildOrdersTab(Map<String, String> loc, user) {
+    if (_ordersStream == null) {
+      return Center(
+        child: Text(
+          loc['error']!,
+          style: const TextStyle(fontSize: 16, color: Colors.grey),
+        ),
+      );
+    }
+
+    return StreamBuilder<DatabaseEvent>(
+      stream: _ordersStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          print('Orders stream error: ${snapshot.error}');
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('${loc['error']!}: ${snapshot.error}'),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _ordersStream = _database.ref('orders').onValue.asBroadcastStream();
+                    });
+                  },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+          print('No orders data found');
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.shopping_bag_outlined, size: 64, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text(
+                  loc['no_orders']!,
+                  style: const TextStyle(fontSize: 16, color: Colors.grey),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final rawValue = snapshot.data!.snapshot.value;
+        if (rawValue == null) {
+          return Center(
+            child: Text(
+              loc['no_orders']!,
+              style: const TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          );
+        }
+
+        final ordersMap = Map<String, dynamic>.from(
+          rawValue as Map,
+        );
+        
+        print('Orders fetched: ${ordersMap.length} orders found');
+
+        // Filter orders by status (Pending and Ready)
+        final activeOrders = ordersMap.entries.where((entry) {
+          try {
+            final order = entry.value as Map<dynamic, dynamic>;
+            final status = order['status'] as String? ?? 'Pending';
+            return status == 'Pending' || status == 'Ready' || status == 'Completed';
+          } catch (e) {
+            print('Error filtering order ${entry.key}: $e');
+            return false;
+          }
+        }).toList();
+
+        print('Active orders after filtering: ${activeOrders.length}');
+
+        // Sort by createdAt descending
+        activeOrders.sort((a, b) {
+          try {
+            final aTime = (a.value as Map)['createdAt'] as num? ?? 0;
+            final bTime = (b.value as Map)['createdAt'] as num? ?? 0;
+            return bTime.compareTo(aTime);
+          } catch (e) {
+            return 0;
+          }
+        });
+
+        if (activeOrders.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.shopping_bag_outlined, size: 64, color: Colors.grey[400]),
+                const SizedBox(height: 16),
+                Text(
+                  loc['no_orders']!,
+                  style: const TextStyle(fontSize: 16, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Total orders in database: ${ordersMap.length}',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16.0),
+          itemCount: activeOrders.length,
+          itemBuilder: (context, index) {
+            final entry = activeOrders[index];
+            final orderKey = entry.key;
+            final order = Map<String, dynamic>.from(entry.value as Map);
+            final orderId = order['orderId'] ?? orderKey;
+            final status = order['status'] as String? ?? 'Pending';
+            final totalPoints = order['totalPoints'] ?? 0;
+            final userId = order['userId'] as String? ?? '';
+            final items = order['items'] as Map<dynamic, dynamic>? ?? {};
+            final notes = order['notes'] as String? ?? '';
+            final timestamp = order['createdAt'] as num? ?? 0;
+            final date = DateTime.fromMillisecondsSinceEpoch(timestamp.toInt());
+
+            return Card(
+              margin: const EdgeInsets.only(bottom: 12.0),
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: ExpansionTile(
+                title: Text(
+                  '${loc['order_id']!} #$orderId',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: status == 'Pending' 
+                                ? Colors.orange.shade100 
+                                : Colors.green.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            status == 'Pending' ? loc['pending']! : loc['ready']!,
+                            style: TextStyle(
+                              color: status == 'Pending' 
+                                  ? Colors.orange.shade800 
+                                  : Colors.green.shade800,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '$totalPoints',
+                          style: const TextStyle(
+                            color: Colors.deepOrange,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.star, color: Colors.amber, size: 18),
+                      ],
+                    ),
+                  ],
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (notes.isNotEmpty) ...[
+                          Text(
+                            '${loc['notes']!}: $notes',
+                            style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        Text(
+                          '${loc['created_at']!}: ${date.toString().substring(0, 16)}',
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          loc['items']!,
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        const SizedBox(height: 8),
+                        ...items.entries.map((itemEntry) {
+                          final item = Map<String, dynamic>.from(itemEntry.value as Map);
+                          final itemName = item['name'] is Map
+                              ? (item['name']['en'] ?? item['name']['ar'] ?? 'Unknown')
+                              : (item['name'] ?? 'Unknown');
+                          final quantity = item['quantity'] ?? 1;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '• $itemName',
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                ),
+                                Text(
+                                  'x$quantity',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        const SizedBox(height: 16),
+                        if (status == 'Pending')
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () => _markOrderAsReady(orderKey, loc),
+                              icon: const Icon(Icons.check_circle),
+                              label: Text(loc['mark_ready']!),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 
   Widget _buildProductImage(Map<String, dynamic> product) {
     // Check for base64 first, then fallback to imageUrl for backward compatibility
@@ -148,131 +592,23 @@ class _SellerDashboardState extends State<SellerDashboard> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const ProductFormScreen(),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.add),
-              label: Text(loc['add_new_product']!),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.deepOrange,
-                foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 50),
-              ),
+          TabBar(
+            controller: _tabController,
+            labelColor: Colors.deepOrange,
+            unselectedLabelColor: Colors.grey,
+            indicatorColor: Colors.deepOrange,
+            tabs: [
+              Tab(text: loc['my_products']!),
+              Tab(text: loc['orders']!),
+            ],
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                loc['my_products']!,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _firestore
-                  .collection('products')
-                  .where('sellerId', isEqualTo: user.uid)
-                  .orderBy('createdAt', descending: true)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Text(
-                      loc['no_products']!,
-                      style: const TextStyle(fontSize: 16, color: Colors.grey),
-                    ),
-                  );
-                }
-
-                return ListView.builder(
-                  padding: const EdgeInsets.all(16.0),
-                  itemCount: snapshot.data!.docs.length,
-                  itemBuilder: (context, index) {
-                    final doc = snapshot.data!.docs[index];
-                    final product = doc.data() as Map<String, dynamic>;
-                    final productId = doc.id;
-                    final isOutOfStock = product['isOutOfStock'] ?? false;
-
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12.0),
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.all(12.0),
-                        leading: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: _buildProductImage(product),
-                        ),
-                        title: Text(
-                          product['name'] ?? 'No Name',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+            child: TabBarView(
+              controller: _tabController,
                           children: [
-                            const SizedBox(height: 4),
-                            Text('${loc['in_stock']!}: ${product['price'] ?? 0} ${loc['in_stock']!.contains('Points') ? '' : 'EGP'}'),
-                            if (product['description'] != null)
-                              Text(
-                                product['description'] as String,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                _buildProductsTab(loc, user),
+                _buildOrdersTab(loc, user),
                           ],
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Switch(
-                              value: isOutOfStock,
-                              onChanged: (value) {
-                                _updateProductStatus(productId, value);
-                              },
-                              activeColor: Colors.red,
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.edit, color: Colors.blue),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => ProductFormScreen(
-                                      productId: productId,
-                                      initialProduct: product,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () => _showDeleteConfirmation(context, productId, loc),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
             ),
           ),
         ],
@@ -356,6 +692,51 @@ class _SellerDashboardState extends State<SellerDashboard> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${loc['error']!}: $e'), backgroundColor: Colors.red),
         );
+      }
+    }
+  }
+
+  void _markOrderAsReady(String orderKey, Map<String, String> loc) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(loc['mark_ready']!),
+        content: Text(loc['mark_ready_confirmation']!),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(loc['cancel']!),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: Text(loc['confirm']!),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await _database.ref('orders/$orderKey/status').set('Ready');
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(loc['order_ready_success']!),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${loc['error']!}: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }

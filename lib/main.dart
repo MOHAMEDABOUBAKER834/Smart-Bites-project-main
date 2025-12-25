@@ -33,7 +33,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Smart Bites',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
+      theme: ThemeData( 
         primarySwatch: Colors.deepOrange,
         fontFamily: 'Cairo',
         brightness: Brightness.light,
