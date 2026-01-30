@@ -204,6 +204,7 @@ class UserRoleHelper {
     return null;
   }
 
+
   /// Get seller verification status from Realtime Database
   static Future<String?> _getVerificationStatus(String userId) async {
     try {
