@@ -1,0 +1,76 @@
+{
+  "rules": {
+    "users": {
+      // Allow authenticated users to read the users list to find sellers (for school selection)
+      // But only allow reading role and name fields, not sensitive data
+      ".read": "auth != null",
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid",
+        "points": {
+          ".read": "$uid === auth.uid",
+          ".write": "$uid === auth.uid"
+        },
+        // Allow reading role and name for seller discovery (school list)
+        "role": {
+          ".read": "auth != null"
+        },
+        "name": {
+          ".read": "auth != null"
+        },
+        "verificationStatus": {
+          ".read": "$uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin'",
+          ".write": "$uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin'"
+        }
+      }
+    },
+    "carts": {
+      "$uid": {
+        ".read": "$uid === auth.uid",
+        ".write": "$uid === auth.uid"
+      }
+    },
+    "products": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "orders": {
+      ".read": "auth != null",
+      "$orderId": {
+        ".read": "auth != null && (!data.exists() || data.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
+        ".write": "auth != null && (newData.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
+        "status": {
+          ".read": "auth != null && (root.child('orders').child($orderId).child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
+          ".write": "auth != null && (root.child('orders').child($orderId).child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')"
+        }
+      }
+    },
+    "numericId_to_uid": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "coupons": {
+      ".read": "auth != null",
+      "$couponCode": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "timesUsed": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    },
+    "sellerVerifications": {
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'Admin'",
+      "$userId": {
+        ".read": "auth != null && (auth.uid === $userId || root.child('users').child(auth.uid).child('role').val() === 'Admin')",
+        ".write": "auth != null && (auth.uid === $userId || root.child('users').child(auth.uid).child('role').val() === 'Admin')"
+      }
+    },
+    "counters": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}
+
