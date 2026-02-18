@@ -1,47 +1,78 @@
 {
   "rules": {
     "users": {
-      // Allow authenticated users to read the users list to find sellers (for school selection)
-      // But only allow reading role and name fields, not sensitive data
-      ".read": "auth != null",
+      // Allow reading users list to find sellers (needed for school dropdown)
+      // This allows reading the users node structure, but individual fields are protected below
+      ".read": true,
       "$uid": {
+        // Users can read their own full data
         ".read": "$uid === auth.uid",
-        ".write": "$uid === auth.uid",
+        // Users can write their own data, Admins can write/delete any user
+        // Note: .write allows both writing data and deleting (setting to null)
+        ".write": "root.child('users').child(auth.uid).child('role').val() === 'Admin' || ($uid === auth.uid && (root.child('users').child(auth.uid).child('banned').val() != true || !newData.exists()))",
         "points": {
           ".read": "$uid === auth.uid",
-          ".write": "$uid === auth.uid"
+          ".write": "$uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin'"
         },
-        // Allow reading role and name for seller discovery (school list)
+        "email": {
+          ".read": "$uid === auth.uid"
+        },
+        "phone": {
+          ".read": "$uid === auth.uid"
+        },
+        "password": {
+          ".read": false,
+          ".write": false
+        },
+        // Allow PUBLIC reading of role and name for seller discovery (school list)
+        // This is needed during signup when user is not authenticated yet
         "role": {
-          ".read": "auth != null"
+          ".read": true
         },
         "name": {
+          ".read": true
+        },
+        "school": {
           ".read": "auth != null"
         },
         "verificationStatus": {
           ".read": "$uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin'",
           ".write": "$uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin'"
+        },
+        "banned": {
+          ".read": "auth != null",
+          ".write": "root.child('users').child(auth.uid).child('role').val() === 'Admin'"
         }
       }
     },
     "carts": {
       "$uid": {
-        ".read": "$uid === auth.uid",
-        ".write": "$uid === auth.uid"
+        ".read": "$uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin'",
+        ".write": "root.child('users').child(auth.uid).child('role').val() === 'Admin' || ($uid === auth.uid && root.child('users').child(auth.uid).child('banned').val() != true)"
       }
     },
     "products": {
       ".read": "auth != null",
-      ".write": "auth != null"
+      "$productId": {
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (root.child('users').child(auth.uid).child('role').val() === 'Seller' && root.child('users').child(auth.uid).child('banned').val() != true))"
+      }
     },
     "orders": {
       ".read": "auth != null",
       "$orderId": {
-        ".read": "auth != null && (!data.exists() || data.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
-        ".write": "auth != null && (newData.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
+        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || !data.exists() || data.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Seller')",
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || ((newData.child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Seller') && root.child('users').child(auth.uid).child('banned').val() != true))",
+        "buyerDeleted": {
+          ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || root.child('users').child(auth.uid).child('role').val() === 'Seller')",
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || data.parent().child('userId').val() === auth.uid)"
+        },
+        "buyerDeletedAt": {
+          ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || root.child('users').child(auth.uid).child('role').val() === 'Seller')",
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || data.parent().child('userId').val() === auth.uid)"
+        },
         "status": {
-          ".read": "auth != null && (root.child('orders').child($orderId).child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')",
-          ".write": "auth != null && (root.child('orders').child($orderId).child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'seller')"
+          ".read": "auth != null && (root.child('orders').child($orderId).child('userId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Seller')",
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (root.child('users').child(auth.uid).child('role').val() === 'Seller' && root.child('users').child(auth.uid).child('banned').val() != true))"
         }
       }
     },
@@ -50,13 +81,16 @@
       ".write": "auth != null"
     },
     "coupons": {
-      ".read": "auth != null",
-      "$couponCode": {
+      "$sellerId": {
         ".read": "auth != null",
-        ".write": "auth != null",
-        "timesUsed": {
+        "$couponCode": {
           ".read": "auth != null",
-          ".write": "auth != null"
+          ".write": "auth != null && (auth.uid === $sellerId || root.child('users').child(auth.uid).child('role').val() === 'Admin')",
+          "timesUsed": {
+            ".read": "auth != null",
+            // Allow any authenticated user (buyers) to increment usage count when placing orders
+            ".write": "auth != null && root.child('users').child(auth.uid).child('banned').val() != true"
+          }
         }
       }
     },
@@ -64,7 +98,13 @@
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'Admin'",
       "$userId": {
         ".read": "auth != null && (auth.uid === $userId || root.child('users').child(auth.uid).child('role').val() === 'Admin')",
-        ".write": "auth != null && (auth.uid === $userId || root.child('users').child(auth.uid).child('role').val() === 'Admin')"
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (auth.uid === $userId && root.child('users').child(auth.uid).child('banned').val() != true))"
+      }
+    },
+    "points_transfers": {
+      ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || root.child('users').child(auth.uid).child('banned').val() != true)",
+      "$transferId": {
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (root.child('users').child(auth.uid).child('banned').val() != true && newData.child('senderId').val() === auth.uid))"
       }
     },
     "counters": {
@@ -73,4 +113,3 @@
     }
   }
 }
-

@@ -115,32 +115,190 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final loc = _localizations[langCode] ?? _localizations['en']!;
     final code = _couponController.text.trim().toUpperCase();
 
-    if (code.isEmpty || _isCouponApplied) return;
+    if (code.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please enter a coupon code', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.orange),
+      );
+      return;
+    }
 
-    final couponRef = FirebaseDatabase.instance.ref('coupons/$code');
-    final snapshot = await couponRef.get();
+    if (_isCouponApplied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Coupon already applied', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.orange),
+      );
+      return;
+    }
 
-    if (snapshot.exists) {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('User not logged in', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      // Get user's school and corresponding sellerId (school canteen)
+      final userRef = FirebaseDatabase.instance.ref('users/${user.uid}');
+      final userSnapshot = await userRef.get();
+      if (!userSnapshot.exists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('User data not found', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      final userData = userSnapshot.value as Map<dynamic, dynamic>;
+      final userSchool = userData['school']?.toString() ?? '';
+      print('User school: $userSchool');
+
+      if (userSchool.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No school selected', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      String? userSellerId;
+      try {
+        final sellersQuery = await FirebaseDatabase.instance.ref('users').get();
+        if (sellersQuery.exists) {
+          final usersMap = sellersQuery.value as Map<dynamic, dynamic>;
+          for (var entry in usersMap.entries) {
+            final uData = entry.value as Map<dynamic, dynamic>;
+            final role = uData['role']?.toString();
+            final name = uData['name']?.toString();
+            print('Checking seller: role=$role, name=$name');
+            if (role == 'Seller' && name == userSchool) {
+              userSellerId = entry.key.toString();
+              print('Found seller ID: $userSellerId for school: $userSchool');
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        print('Error finding seller ID for coupon: $e');
+      }
+
+      if (userSellerId == null) {
+        print('Seller ID not found for school: $userSchool');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Seller not found for your school', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      // Coupons are stored per seller: coupons/{sellerId}/{code}
+      final couponRef = FirebaseDatabase.instance.ref('coupons/$userSellerId/$code');
+      print('Looking for coupon at: coupons/$userSellerId/$code');
+      final snapshot = await couponRef.get();
+
+      if (!snapshot.exists) {
+        print('Coupon not found: $code');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Coupon code not found', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
       final data = snapshot.value as Map<dynamic, dynamic>;
+      print('Coupon data: $data');
+
+      final bool isActive = data['isActive'] != false;
+      if (!isActive) {
+        print('Coupon is not active');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('This coupon is not active', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final startAt = (data['startAt'] as num?)?.toInt();
+      final expiresAt = (data['expiresAt'] as num?)?.toInt();
+
+      if (startAt != null && now < startAt) {
+        print('Coupon not yet valid');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('This coupon is not yet valid', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      if (expiresAt != null && expiresAt > 0 && now > expiresAt) {
+        print('Coupon expired');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('This coupon has expired', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
       final limit = (data['usageLimit'] as num?)?.toInt() ?? 1;
       final used = (data['timesUsed'] as num?)?.toInt() ?? 0;
-
-      if (used < limit) {
-        setState(() {
-          _discountPoints = (data['discountPoints'] as num?)?.toInt() ?? 0;
-          _isCouponApplied = true;
-        });
+      print('Coupon usage: $used / $limit');
+      if (used >= limit) {
+        print('Coupon usage limit reached');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(loc['coupon_success']!, style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.green),
+          SnackBar(content: Text('This coupon has reached its usage limit', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
         );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(loc['coupon_fail']!, style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
-        );
+        return;
       }
-    } else {
+
+      // Calculate discount based on percentage of current subtotal
+      final int currentSubtotal = _cartItems.values.fold<int>(0, (sum, item) {
+        final itemPoints = (item['points'] as num?)?.toInt() ?? 0;
+        final quantity = (item['quantity'] as num?)?.toInt() ?? 1;
+        return sum + (itemPoints * quantity);
+      });
+
+      print('Current subtotal: $currentSubtotal');
+
+      if (currentSubtotal <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cart is empty', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      final numPercent = (data['discountPercent'] as num?) ?? 0;
+      print('Discount percent: $numPercent');
+      int discountPoints;
+      if (numPercent > 0) {
+        discountPoints = ((currentSubtotal * numPercent) / 100).round();
+        print('Calculated discount: $discountPoints (${numPercent}% of $currentSubtotal)');
+      } else {
+        // Backward compatibility: fall back to stored discountPoints
+        discountPoints = (data['discountPoints'] as num?)?.toInt() ?? 0;
+        print('Using stored discount: $discountPoints');
+      }
+
+      if (discountPoints <= 0) {
+        print('Discount is 0 or negative');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Invalid discount amount', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      if (discountPoints > currentSubtotal) {
+        discountPoints = currentSubtotal;
+        print('Capping discount to subtotal: $discountPoints');
+      }
+
+      print('Final discount points: $discountPoints');
+      setState(() {
+        _discountPoints = discountPoints;
+        _isCouponApplied = true;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(loc['coupon_fail']!, style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
+        SnackBar(content: Text('${loc['coupon_success']!} Discount: $discountPoints points', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.green),
+      );
+    } catch (e, stackTrace) {
+      print('Error applying coupon: $e');
+      print('Stack trace: $stackTrace');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: ${e.toString()}', style: _getTextStyle(langCode, color: Colors.white)), backgroundColor: Colors.red),
       );
     }
   }
@@ -284,8 +442,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
       updates['/users/${user.uid}/points'] = ServerValue.increment(-finalTotal);
 
-      if (_isCouponApplied && _couponController.text.isNotEmpty) {
-        updates['/coupons/${_couponController.text.trim().toUpperCase()}/timesUsed'] = ServerValue.increment(1);
+      if (_isCouponApplied && _couponController.text.isNotEmpty && userSellerId != null) {
+        final code = _couponController.text.trim().toUpperCase();
+        updates['/coupons/$userSellerId/$code/timesUsed'] = ServerValue.increment(1);
       }
 
       updates['/carts/${user.uid}'] = null;
@@ -383,12 +542,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 labelText: loc['coupon_hint'],
                 labelStyle: _getTextStyle(langCode, color: Colors.grey.shade600, weight: FontWeight.normal),
                 filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                suffixIcon: TextButton(
-                  onPressed: _isCouponApplied ? null : _applyCoupon,
-                  child: Text(loc['apply']!, style: _getTextStyle(langCode, weight: FontWeight.bold, color: _isCouponApplied ? Colors.grey : Colors.deepOrange)),
+                fillColor: _isCouponApplied ? Colors.green.shade50 : Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12), 
+                  borderSide: BorderSide(
+                    color: _isCouponApplied ? Colors.green : Colors.transparent,
+                    width: _isCouponApplied ? 2 : 0,
+                  ),
                 ),
+                suffixIcon: _isCouponApplied
+                    ? IconButton(
+                        icon: const Icon(Icons.check_circle, color: Colors.green),
+                        onPressed: () {
+                          setState(() {
+                            _isCouponApplied = false;
+                            _discountPoints = 0;
+                            _couponController.clear();
+                          });
+                        },
+                        tooltip: 'Remove coupon',
+                      )
+                    : TextButton(
+                        onPressed: _applyCoupon,
+                        child: Text(loc['apply']!, style: _getTextStyle(langCode, weight: FontWeight.bold, color: Colors.deepOrange)),
+                      ),
+                helperText: _isCouponApplied 
+                    ? 'Discount: $_discountPoints points' 
+                    : null,
+                helperStyle: _getTextStyle(langCode, color: Colors.green, size: 12),
               ),
             ),
             const SizedBox(height: 24),

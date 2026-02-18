@@ -39,6 +39,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   String? _existingImageBase64; // For editing existing products
   bool _isLoading = false;
   String _selectedCategory = 'Sandwiches'; // Default category
+  // Sauces for this product (each: id, name{ar,en}, points)
+  List<Map<String, dynamic>> _sauces = [];
 
   static const Map<String, Map<String, String>> _localizations = {
     'ar': {
@@ -55,6 +57,16 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       'save': 'حفظ',
       'saving': 'جاري الحفظ...',
       'product_saved': 'تم حفظ المنتج بنجاح',
+      'sauces_section': 'إضافات الصوص (اختياري للساندويتشات)',
+      'add_sauce': 'إضافة صوص',
+      'sauce_name_ar': 'اسم الصوص (عربي)',
+      'sauce_name_en': 'اسم الصوص (إنجليزي)',
+      'sauce_points': 'نقاط إضافية للصوص',
+      'sauce_points_hint': 'عدد النقاط الإضافية',
+      'sauce_name_required': 'اسم الصوص مطلوب',
+      'sauce_points_required': 'نقاط الصوص مطلوبة',
+      'sauce_points_invalid': 'النقاط يجب أن تكون رقماً',
+      'no_sauces_added': 'لم تتم إضافة أي صوص لهذا المنتج بعد',
       'error': 'حدث خطأ',
       'name_required': 'الاسم مطلوب',
       'price_required': 'السعر مطلوب',
@@ -77,6 +89,16 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       'save': 'Save',
       'saving': 'Saving...',
       'product_saved': 'Product saved successfully',
+      'sauces_section': 'Sauce Add-ons (optional for sandwiches)',
+      'add_sauce': 'Add Sauce',
+      'sauce_name_ar': 'Sauce name (Arabic)',
+      'sauce_name_en': 'Sauce name (English)',
+      'sauce_points': 'Extra points for sauce',
+      'sauce_points_hint': 'Number of extra points',
+      'sauce_name_required': 'Sauce name is required',
+      'sauce_points_required': 'Sauce points are required',
+      'sauce_points_invalid': 'Points must be a number',
+      'no_sauces_added': 'No sauces added for this product yet',
       'error': 'An error occurred',
       'name_required': 'Name is required',
       'price_required': 'Price is required',
@@ -115,6 +137,16 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         if (imageUrl != null && imageUrl.isNotEmpty) {
           _existingImageBase64 = imageUrl; // Will be treated as URL in display
         }
+      }
+
+      // Load existing sauces if present
+      final existingSauces = widget.initialProduct!['availableSauces'];
+      if (existingSauces is List) {
+        _sauces = existingSauces
+            .where((s) => s is Map)
+            .map<Map<String, dynamic>>(
+                (s) => Map<String, dynamic>.from(s as Map))
+            .toList();
       }
     }
   }
@@ -308,6 +340,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         'sellerId': user.uid,
         'isOutOfStock': false,
         'updatedAt': FieldValue.serverTimestamp(),
+        if (_sauces.isNotEmpty) 'availableSauces': _sauces,
       };
 
       String? firestoreProductId = widget.productId;
@@ -399,6 +432,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             'ar': _categoryOptions[_selectedCategory]?['ar'] ?? 'عام',
             'en': _categoryOptions[_selectedCategory]?['en'] ?? _selectedCategory,
           },
+          if (_sauces.isNotEmpty) 'availableSauces': _sauces,
           'sellerId': user.uid,
           'createdAt': ServerValue.timestamp,
         };
@@ -459,6 +493,99 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  Future<void> _showAddSauceDialog() async {
+    final languageProvider =
+        Provider.of<LanguageProvider>(context, listen: false);
+    final langCode = languageProvider.currentLocale.languageCode;
+    final loc = _localizations[langCode]!;
+
+    final nameArController = TextEditingController();
+    final nameEnController = TextEditingController();
+    final pointsController = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(loc['add_sauce']!),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameArController,
+                decoration: InputDecoration(labelText: loc['sauce_name_ar']),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: nameEnController,
+                decoration: InputDecoration(labelText: loc['sauce_name_en']),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: pointsController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: false),
+                decoration: InputDecoration(
+                  labelText: loc['sauce_points'],
+                  hintText: loc['sauce_points_hint'],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(loc['cancel'] ?? 'Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(loc['add_sauce']!),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final nameAr = nameArController.text.trim();
+    final nameEn = nameEnController.text.trim();
+    final pointsText = pointsController.text.trim();
+
+    if (nameAr.isEmpty && nameEn.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(loc['sauce_name_required']!)),
+      );
+      return;
+    }
+    if (pointsText.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(loc['sauce_points_required']!)),
+      );
+      return;
+    }
+    final points = int.tryParse(pointsText);
+    if (points == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(loc['sauce_points_invalid']!)),
+      );
+      return;
+    }
+
+    final id =
+        'sauce_${DateTime.now().millisecondsSinceEpoch}_${_sauces.length}';
+    setState(() {
+      _sauces.add({
+        'id': id,
+        'name': {
+          'ar': nameAr.isNotEmpty ? nameAr : nameEn,
+          'en': nameEn.isNotEmpty ? nameEn : nameAr,
+        },
+        'points': points,
+      });
+    });
   }
 
   @override
@@ -588,11 +715,69 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                   if (newValue != null) {
                     setState(() {
                       _selectedCategory = newValue;
+                      if (_selectedCategory != 'Sandwiches') {
+                        _sauces.clear();
+                      }
                     });
                   }
                 },
               ),
               const SizedBox(height: 16),
+
+              // Sauces section (only for sandwiches)
+              if (_selectedCategory == 'Sandwiches') ...[
+                Text(
+                  loc['sauces_section']!,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (_sauces.isEmpty)
+                  Text(
+                    loc['no_sauces_added']!,
+                    style:
+                        const TextStyle(fontSize: 12, color: Colors.grey),
+                  )
+                else
+                  Column(
+                    children: _sauces.map((sauce) {
+                      final nameMap =
+                          sauce['name'] as Map<dynamic, dynamic>? ?? {};
+                      final name =
+                          nameMap[languageProvider.currentLocale.languageCode] ??
+                              nameMap['en'] ??
+                              nameMap['ar'] ??
+                              '';
+                      final points = sauce['points'] ?? 0;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(name.toString()),
+                        subtitle: Text(
+                            '${loc['sauce_points']}: $points'),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline,
+                              color: Colors.red),
+                          onPressed: () {
+                            setState(() {
+                              _sauces.remove(sauce);
+                            });
+                          },
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _showAddSauceDialog,
+                    icon: const Icon(Icons.add),
+                    label: Text(loc['add_sauce']!),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
               
               // Description field
               TextFormField(

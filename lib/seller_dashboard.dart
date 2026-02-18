@@ -9,6 +9,7 @@ import 'package:smart_bites/language_provider.dart';
 import 'package:smart_bites/theme_provider.dart';
 import 'package:smart_bites/product_form_screen.dart';
 import 'package:smart_bites/seller_profile_screen.dart';
+import 'package:smart_bites/seller_coupons_screen.dart';
 
 class SellerDashboard extends StatefulWidget {
   const SellerDashboard({super.key});
@@ -396,146 +397,230 @@ class _SellerDashboardState extends State<SellerDashboard> with SingleTickerProv
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16.0),
-          itemCount: activeOrders.length,
-          itemBuilder: (context, index) {
-            final entry = activeOrders[index];
-            final orderKey = entry.key;
-            final order = Map<String, dynamic>.from(entry.value as Map);
-            final orderId = order['orderId'] ?? orderKey;
-            final status = order['status'] as String? ?? 'Pending';
-            final totalPoints = order['totalPoints'] ?? 0;
-            final userId = order['userId'] as String? ?? '';
-            final items = order['items'] as Map<dynamic, dynamic>? ?? {};
-            final notes = order['notes'] as String? ?? '';
-            final timestamp = order['createdAt'] as num? ?? 0;
-            final date = DateTime.fromMillisecondsSinceEpoch(timestamp.toInt());
+        // 🔢 احسب إجمالي النقاط التي جمعها هذا البائع من كل الطلبات الخاصة بمدرسته
+        final int totalSellerPoints = activeOrders.fold<int>(0, (sum, entry) {
+          try {
+            final order = entry.value as Map<dynamic, dynamic>;
+            final orderPoints = (order['totalPoints'] as num?)?.toInt() ?? 0;
+            return sum + orderPoints;
+          } catch (_) {
+            return sum;
+          }
+        });
 
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12.0),
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: ExpansionTile(
-                title: Text(
-                  '${loc['order_id']!} #$orderId',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.deepOrange.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: status == 'Pending' 
-                                ? Colors.orange.shade100 
-                                : Colors.green.shade100,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            status == 'Pending' ? loc['pending']! : loc['ready']!,
-                            style: TextStyle(
-                              color: status == 'Pending' 
-                                  ? Colors.orange.shade800 
-                                  : Colors.green.shade800,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          '$totalPoints',
-                          style: const TextStyle(
-                            color: Colors.deepOrange,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.star, color: Colors.amber, size: 18),
-                      ],
+                    Icon(Icons.star, color: Colors.amber.shade700),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${loc['total_points']!}: ',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.deepOrange,
+                      ),
+                    ),
+                    Text(
+                      '$totalSellerPoints',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.deepOrange,
+                      ),
                     ),
                   ],
                 ),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (notes.isNotEmpty) ...[
-                          Text(
-                            '${loc['notes']!}: $notes',
-                            style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                        Text(
-                          '${loc['created_at']!}: ${date.toString().substring(0, 16)}',
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          loc['items']!,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                        const SizedBox(height: 8),
-                        ...items.entries.map((itemEntry) {
-                          final item = Map<String, dynamic>.from(itemEntry.value as Map);
-                          final itemName = item['name'] is Map
-                              ? (item['name']['en'] ?? item['name']['ar'] ?? 'Unknown')
-                              : (item['name'] ?? 'Unknown');
-                          final quantity = item['quantity'] ?? 1;
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4.0),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '• $itemName',
-                                    style: const TextStyle(fontSize: 14),
-                                  ),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                itemCount: activeOrders.length,
+                itemBuilder: (context, index) {
+                  final entry = activeOrders[index];
+                  final orderKey = entry.key;
+                  final order = Map<String, dynamic>.from(entry.value as Map);
+                  final orderId = order['orderId'] ?? orderKey;
+                  final status = order['status'] as String? ?? 'Pending';
+                  final totalPoints = order['totalPoints'] ?? 0;
+                  final userId = order['userId'] as String? ?? '';
+                  final items = order['items'] as Map<dynamic, dynamic>? ?? {};
+                  final notes = order['notes'] as String? ?? '';
+                  final timestamp = order['createdAt'] as num? ?? 0;
+                  final date = DateTime.fromMillisecondsSinceEpoch(timestamp.toInt());
+
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12.0),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ExpansionTile(
+                      title: Text(
+                        '${loc['order_id']!} #$orderId',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: status == 'Pending' 
+                                      ? Colors.orange.shade100 
+                                      : Colors.green.shade100,
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
-                                Text(
-                                  'x$quantity',
-                                  style: const TextStyle(
+                                child: Text(
+                                  status == 'Pending' ? loc['pending']! : loc['ready']!,
+                                  style: TextStyle(
+                                    color: status == 'Pending' 
+                                        ? Colors.orange.shade800 
+                                        : Colors.green.shade800,
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 14,
+                                    fontSize: 12,
                                   ),
                                 ),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                        const SizedBox(height: 16),
-                        if (status == 'Pending')
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: () => _markOrderAsReady(orderKey, loc),
-                              icon: const Icon(Icons.check_circle),
-                              label: Text(loc['mark_ready']!),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
                               ),
-                            ),
+                              const Spacer(),
+                              Text(
+                                '$totalPoints',
+                                style: const TextStyle(
+                                  color: Colors.deepOrange,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(Icons.star, color: Colors.amber, size: 18),
+                            ],
                           ),
+                        ],
+                      ),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (notes.isNotEmpty) ...[
+                                Text(
+                                  '${loc['notes']!}: $notes',
+                                  style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
+                                ),
+                                const SizedBox(height: 8),
+                              ],
+                              Text(
+                                '${loc['created_at']!}: ${date.toString().substring(0, 16)}',
+                                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                loc['items']!,
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                              const SizedBox(height: 8),
+                              ...items.entries.map((itemEntry) {
+                                final item = Map<String, dynamic>.from(itemEntry.value as Map);
+                                final itemName = item['name'] is Map
+                                    ? (item['name']['en'] ?? item['name']['ar'] ?? 'Unknown')
+                                    : (item['name'] ?? 'Unknown');
+                                final quantity = item['quantity'] ?? 1;
+
+                                // Read selected sauces (if any) from cart / order item
+                                final List<dynamic> selectedSaucesList =
+                                    (item['selectedSauces'] as List?) ?? const [];
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 6.0),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              '• $itemName',
+                                              style: const TextStyle(fontSize: 14),
+                                            ),
+                                          ),
+                                          Text(
+                                            'x$quantity',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (selectedSaucesList.isNotEmpty) ...[
+                                        const SizedBox(height: 2),
+                                        Padding(
+                                          padding: const EdgeInsetsDirectional.only(start: 12.0),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: selectedSaucesList.map((sauceRaw) {
+                                              final sauce = sauceRaw is Map
+                                                  ? Map<String, dynamic>.from(sauceRaw as Map)
+                                                  : <String, dynamic>{};
+                                              final sauceName = sauce['name']?.toString() ?? 'Sauce';
+                                              final saucePoints =
+                                                  (sauce['points'] as num?)?.toInt() ?? 0;
+                                              return Text(
+                                                '- $sauceName (+$saucePoints)',
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey,
+                                                ),
+                                              );
+                                            }).toList(),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                              const SizedBox(height: 16),
+                              if (status == 'Pending')
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    onPressed: () => _markOrderAsReady(orderKey, loc),
+                                    icon: const Icon(Icons.check_circle),
+                                    label: Text(loc['mark_ready']!),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
-                  ),
-                ],
+                  );
+                },
               ),
-            );
-          },
+            ),
+          ],
         );
       },
     );
@@ -619,6 +704,16 @@ class _SellerDashboardState extends State<SellerDashboard> with SingleTickerProv
               themeProvider.toggleTheme();
             },
             tooltip: themeProvider.isDarkMode ? 'Light Mode' : 'Dark Mode',
+          ),
+          IconButton(
+            icon: const Icon(Icons.local_offer_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SellerCouponsScreen()),
+              );
+            },
+            tooltip: 'Coupons',
           ),
           IconButton(
             icon: const Icon(Icons.person_outline),

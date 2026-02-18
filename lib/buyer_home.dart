@@ -469,83 +469,218 @@ class _BuyerHomeState extends State<BuyerHome> with WidgetsBindingObserver {
     print('Product tapped: $productKey');
     print('Product data: $product');
 
-    // Show dialog with Add to Cart button
+    final productName = product['name'] ?? 'Unknown Product';
+    final productImage = product['imageBase64'] as String? ?? product['imageUrl'] as String?;
+    final productDescription = product['description'] ?? '';
+    final basePrice = ((product['price'] as num?)?.toInt() ?? 0);
+
+    // Read sauces (if any) saved on the product
+    final rawSauces = product['availableSauces'];
+    final List<Map<String, dynamic>> availableSauces = [];
+    if (rawSauces is List) {
+      for (var s in rawSauces) {
+        if (s is Map) {
+          availableSauces.add(Map<String, dynamic>.from(s as Map));
+        }
+      }
+    }
+
+    // If no sauces configured, show simple dialog and add without sauces
+    if (availableSauces.isEmpty) {
+      showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text(productName, style: const TextStyle(fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (productImage != null) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: SizedBox(
+                        height: 150,
+                        width: double.infinity,
+                        child: _buildProductImage(productImage),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (productDescription.isNotEmpty) ...[
+                    Text(productDescription, style: TextStyle(fontSize: 14, color: Colors.grey[700])),
+                    const SizedBox(height: 12),
+                  ],
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '${loc['total']!}:',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      Row(
+                        children: [
+                          Text(
+                            '$basePrice',
+                            style: const TextStyle(
+                              color: Colors.deepOrange,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.star, color: Colors.amber, size: 20),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(loc['cancel'] ?? 'Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _addToCart(product, productKey, langCode, loc, [], navigateToCart: true);
+                },
+                icon: const Icon(Icons.add_shopping_cart),
+                label: Text(loc['add_to_cart'] ?? 'Add to Cart'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepOrange,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          );
+        },
+      );
+      return;
+    }
+
+    // There are sauces → show checkbox list with dynamic total
     showDialog(
       context: context,
       builder: (BuildContext context) {
-        final productName = product['name'] ?? 'Unknown Product';
-        final productPrice = ((product['price'] as num?)?.toInt() ?? 0);
-        final productImage = product['imageBase64'] as String? ?? product['imageUrl'] as String?;
-        final productDescription = product['description'] ?? '';
+        List<Map<String, dynamic>> selectedSauces = [];
+        int totalPoints = basePrice;
 
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Text(productName, style: TextStyle(fontWeight: FontWeight.bold)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (productImage != null) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SizedBox(
-                      height: 150,
-                      width: double.infinity,
-                      child: _buildProductImage(productImage),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (productDescription.isNotEmpty) ...[
-                  Text(productDescription, style: TextStyle(fontSize: 14, color: Colors.grey[700])),
-                  const SizedBox(height: 12),
-                ],
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        void recalcTotal() {
+          totalPoints = basePrice;
+          for (final s in selectedSauces) {
+            totalPoints += (s['points'] as num?)?.toInt() ?? 0;
+          }
+        }
+
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Text(productName, style: const TextStyle(fontWeight: FontWeight.bold)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (productImage != null) ...[
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: SizedBox(
+                          height: 150,
+                          width: double.infinity,
+                          child: _buildProductImage(productImage),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (productDescription.isNotEmpty) ...[
+                      Text(productDescription, style: TextStyle(fontSize: 14, color: Colors.grey[700])),
+                      const SizedBox(height: 12),
+                    ],
                     Text(
-                      '${loc['total']!}:',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      loc['select_sauces'] ?? 'Select Sauces',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
+                    const SizedBox(height: 8),
+                    ...availableSauces.map((sauce) {
+                      final nameMap = sauce['name'] as Map<dynamic, dynamic>? ?? {};
+                      final sauceName = nameMap[langCode] ?? nameMap['en'] ?? nameMap['ar'] ?? '';
+                      final saucePoints = (sauce['points'] as num?)?.toInt() ?? 0;
+                      final isSelected = selectedSauces.any((s) => s['id'] == sauce['id']);
+                      return Card(
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        child: CheckboxListTile(
+                          title: Text('$sauceName'),
+                          subtitle: Text('+$saucePoints ${loc['point'] ?? 'Point'}'),
+                          value: isSelected,
+                          onChanged: (checked) {
+                            setStateDialog(() {
+                              if (checked == true) {
+                                selectedSauces.add(sauce);
+                              } else {
+                                selectedSauces.removeWhere((s) => s['id'] == sauce['id']);
+                              }
+                              recalcTotal();
+                            });
+                          },
+                          activeColor: Colors.deepOrange,
+                        ),
+                      );
+                    }).toList(),
+                    const SizedBox(height: 8),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          '$productPrice',
-                          style: TextStyle(
-                            color: Colors.deepOrange,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
+                          loc['total_points'] ?? loc['total'] ?? 'Total',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                         ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.star, color: Colors.amber, size: 20),
+                        Row(
+                          children: [
+                            Text(
+                              '$totalPoints',
+                              style: const TextStyle(
+                                color: Colors.deepOrange,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.star, color: Colors.amber, size: 20),
+                          ],
+                        ),
                       ],
                     ),
                   ],
                 ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(loc['cancel'] ?? 'Cancel'),
-            ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                _addToCart(product, productKey, langCode, loc, [], navigateToCart: true);
-              },
-              icon: const Icon(Icons.add_shopping_cart),
-              label: Text(loc['add_to_cart'] ?? 'Add to Cart'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.deepOrange,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(loc['cancel'] ?? 'Cancel'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _addToCart(product, productKey, langCode, loc, selectedSauces, navigateToCart: true);
+                  },
+                  icon: const Icon(Icons.add_shopping_cart),
+                  label: Text(loc['confirm_addition'] ?? loc['add_to_cart'] ?? 'Add to Cart'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.deepOrange,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -1383,7 +1518,42 @@ class _BuyerHomeState extends State<BuyerHome> with WidgetsBindingObserver {
       }
     }).toList();
 
-    print('Filtered products count: ${filteredProducts.length}');
+    // De-duplicate products: if there are multiple entries for the same seller + name,
+    // keep only the latest one (highest createdAt)
+    final Map<String, MapEntry<String, dynamic>> deduped = {};
+    for (final entry in filteredProducts) {
+      try {
+        final product = entry.value as Map<dynamic, dynamic>;
+        final productSellerId = product['sellerId']?.toString() ?? '';
+        final nameData = product['name'];
+        String name = '';
+        if (nameData is Map) {
+          name = (nameData[langCode] ?? nameData['en'] ?? nameData['ar'] ?? '').toString();
+        } else {
+          name = (nameData ?? '').toString();
+        }
+        final key = '${productSellerId}_$name';
+        final createdAt = (product['createdAt'] as num?)?.toInt() ?? 0;
+
+        if (!deduped.containsKey(key)) {
+          deduped[key] = entry;
+        } else {
+          final existing = deduped[key]!;
+          final existingProduct = existing.value as Map<dynamic, dynamic>;
+          final existingCreated =
+              (existingProduct['createdAt'] as num?)?.toInt() ?? 0;
+          if (createdAt >= existingCreated) {
+            deduped[key] = entry;
+          }
+        }
+      } catch (_) {
+        // If anything goes wrong, just keep the original entry
+      }
+    }
+
+    filteredProducts = deduped.values.toList();
+
+    print('Filtered products count after dedup: ${filteredProducts.length}');
 
     if (filteredProducts.isEmpty) {
       if (productsMap.isEmpty) {
@@ -1441,6 +1611,7 @@ class _BuyerHomeState extends State<BuyerHome> with WidgetsBindingObserver {
           'isOutOfStock': !(productData['isAvailable'] ?? true),
           'category': productData['category'],
           'sellerId': productData['sellerId'] ?? '',
+          'availableSauces': productData['availableSauces'],
         };
 
         return buildProductCard(convertedProduct, productKey, langCode, loc);

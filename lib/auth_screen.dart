@@ -47,6 +47,8 @@ class AuthScreen extends StatefulWidget {
       'verification_error': 'فشل إرسال بريد التحقق. حاول مرة أخرى.',
       'email_not_verified': 'بريدك الإلكتروني غير مفعل بعد. يرجى تفعيله أولاً.',
       'email_already_in_use': 'البريد الإلكتروني مستخدم بالفعل',
+      'account_already_exists': 'هذا البريد الإلكتروني مسجل بالفعل. يرجى تسجيل الدخول بدلاً من ذلك.',
+      'account_deleted_exists': 'هذا البريد الإلكتروني مسجل بالفعل ولكن تم حذف الحساب من قبل المشرف. يرجى استخدام بريد إلكتروني آخر أو التواصل مع الدعم.',
       'invalid_email': 'بريد إلكتروني غير صالح',
       'weak_password': 'كلمة المرور ضعيفة. يجب أن تحتوي على 6 أحرف على الأقل',
       'verify_email_button': 'تحقق من البريد',
@@ -86,6 +88,8 @@ class AuthScreen extends StatefulWidget {
       'verification_error': 'Failed to send verification email. Please try again.',
       'email_not_verified': 'Your email is not verified yet. Please verify it first.',
       'email_already_in_use': 'Email already in use',
+      'account_already_exists': 'This email is already registered. Please sign in instead.',
+      'account_deleted_exists': 'This email is already registered but the account was deleted by admin. Please use a different email address or contact support.',
       'invalid_email': 'Invalid email address',
       'weak_password': 'Weak password. Must be at least 6 characters',
       'verify_email_button': 'Verify Email',
@@ -138,6 +142,12 @@ class _AuthScreenState extends State<AuthScreen> {
     print('=== Loading available schools ===');
     final schools = <String>[];
 
+    // Check if user is authenticated (needed for Realtime DB)
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      print('⚠️ User not authenticated - will only try Firestore');
+    }
+
     try {
       // Try Firestore first
       try {
@@ -158,7 +168,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
           if (name.isNotEmpty) {
             schools.add(name);
-            print('  ✓ Added seller: $name');
+            print('  ✓ Added seller from Firestore: $name');
           } else {
             print('  ✗ Skipped: name is empty');
           }
@@ -169,8 +179,15 @@ class _AuthScreenState extends State<AuthScreen> {
       }
 
       // Also try Realtime Database (may have sellers not in Firestore)
+      // Now works even without authentication (rules allow reading role/name)
       try {
         print('Searching Realtime Database for sellers...');
+        if (currentUser != null) {
+          print('Current user: ${currentUser.uid}');
+        } else {
+          print('No authenticated user - using public read access for role/name');
+        }
+        
         final usersSnapshot = await _database.child('users').get()
             .timeout(const Duration(seconds: 10));
 
@@ -181,6 +198,8 @@ class _AuthScreenState extends State<AuthScreen> {
           for (var entry in usersMap.entries) {
             final userId = entry.key.toString();
             final userData = entry.value as Map<dynamic, dynamic>;
+            
+            // Try to read role and name (public fields)
             final role = userData['role']?.toString();
             final name = userData['name']?.toString();
 
@@ -203,6 +222,11 @@ class _AuthScreenState extends State<AuthScreen> {
         }
       } catch (realtimeError) {
         print('Realtime DB error: $realtimeError');
+        if (realtimeError.toString().contains('permission-denied')) {
+          print('⚠️ Permission denied - Make sure database rules are deployed!');
+          print('   Rules should allow: users/\$uid/role/.read = true');
+          print('   Rules should allow: users/\$uid/name/.read = true');
+        }
       }
 
       // Remove duplicates and sort
@@ -384,9 +408,29 @@ class _AuthScreenState extends State<AuthScreen> {
           return;
         }
 
+        // Check if email exists in database (might be deleted account)
+        final emailToCheck = _emailController.text.trim();
+        bool emailExistsInDB = false;
+        try {
+          // Check Realtime Database
+          final usersSnapshot = await _database.child('users').get();
+          if (usersSnapshot.exists) {
+            final usersMap = usersSnapshot.value as Map<dynamic, dynamic>;
+            for (var entry in usersMap.entries) {
+              final userData = entry.value as Map<dynamic, dynamic>;
+              if (userData['email']?.toString().toLowerCase() == emailToCheck.toLowerCase()) {
+                emailExistsInDB = true;
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          print('Error checking email in database: $e');
+        }
+
         // Create user account - نفس المشروع القديم
         final userCredential = await _auth.createUserWithEmailAndPassword(
-          email: _emailController.text.trim(),
+          email: emailToCheck,
           password: _passwordController.text.trim(),
         );
 
@@ -417,7 +461,31 @@ class _AuthScreenState extends State<AuthScreen> {
       String errorMessage = loc['auth_error']!;
 
       if (e.code == 'email-already-in-use') {
-        errorMessage = loc['email_already_in_use']!;
+        // Check if email exists in database to determine if it's a deleted account
+        final emailToCheck = _emailController.text.trim();
+        bool emailExistsInDB = false;
+        try {
+          final usersSnapshot = await _database.child('users').get();
+          if (usersSnapshot.exists) {
+            final usersMap = usersSnapshot.value as Map<dynamic, dynamic>;
+            for (var entry in usersMap.entries) {
+              final userData = entry.value as Map<dynamic, dynamic>;
+              if (userData['email']?.toString().toLowerCase() == emailToCheck.toLowerCase()) {
+                emailExistsInDB = true;
+                break;
+              }
+            }
+          }
+        } catch (dbError) {
+          print('Error checking email in database: $dbError');
+        }
+
+        // If email exists in Firebase Auth but not in database, it was likely deleted
+        if (!emailExistsInDB) {
+          errorMessage = loc['account_deleted_exists']!;
+        } else {
+          errorMessage = loc['account_already_exists']!;
+        }
       } else if (e.code == 'invalid-email') {
         errorMessage = loc['invalid_email']!;
       } else if (e.code == 'weak-password') {

@@ -14,6 +14,26 @@ class UserRoleHelper {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static final FirebaseDatabase _database = FirebaseDatabase.instance;
 
+  /// Check if the user record exists in Realtime Database.
+  /// We treat missing `users/{uid}` as "account deleted" (even if Firebase Auth user still exists).
+  static Future<bool> _doesUserExistInRealtimeDb(String userId) async {
+    try {
+      final ref = _database.ref('users/$userId');
+      final snapshot = await ref.get().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          print('Realtime Database timeout checking user existence');
+          throw TimeoutException('Realtime Database timeout');
+        },
+      );
+      return snapshot.exists;
+    } catch (e) {
+      print('❌ Error checking user existence in Realtime DB: $e');
+      // Fail open to avoid locking out users on transient network errors
+      return true;
+    }
+  }
+
   /// Get user role from Firestore or Realtime Database
   static Future<String?> getUserRole(String userId) async {
     // Try Firestore first
@@ -61,6 +81,31 @@ class UserRoleHelper {
 
     print('⚠️ No role found for user: $userId');
     return null;
+  }
+
+  /// Check if user is banned (by admin) from Realtime Database
+  static Future<bool> _isUserBanned(String userId) async {
+    try {
+      final bannedRef = _database.ref('users/$userId/banned');
+      final snapshot = await bannedRef.get().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          print('Realtime Database timeout getting banned flag');
+          throw TimeoutException('Realtime Database timeout');
+        },
+      );
+
+      if (snapshot.exists) {
+        final value = snapshot.value;
+        final isBanned = value == true || value?.toString() == 'true';
+        print('✅ Banned flag for $userId: $isBanned');
+        return isBanned;
+      }
+    } catch (e) {
+      print('❌ Error checking banned flag: $e');
+    }
+
+    return false;
   }
 
 
@@ -121,6 +166,70 @@ class UserRoleHelper {
             context,
             MaterialPageRoute(builder: (context) => const AuthScreen()),
                 (route) => false,
+          );
+        }
+        return;
+      }
+
+      // If admin deleted the user data from Realtime DB, block app usage.
+      final existsInRealtimeDb = await _doesUserExistInRealtimeDb(user.uid);
+      if (!existsInRealtimeDb) {
+        print('🗑️ User record missing in Realtime DB. Treating as deleted account.');
+        if (context.mounted) {
+          await FirebaseAuth.instance.signOut();
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Account Deleted'),
+              content: const Text(
+                'This account has been deleted. You can no longer use this account. '
+                'Please sign up again or contact the administrator.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const AuthScreen()),
+            (route) => false,
+          );
+        }
+        return;
+      }
+
+      // First, check if this user is banned by admin
+      final isBanned = await _isUserBanned(user.uid);
+      if (isBanned) {
+        print('⛔ User is banned, signing out and redirecting to AuthScreen');
+        if (context.mounted) {
+          await FirebaseAuth.instance.signOut();
+          // Optional: show a simple dialog explaining the ban
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Account Disabled'),
+              content: const Text(
+                'Your account has been disabled by the administrator. '
+                'Please contact support for more information.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => const AuthScreen()),
+            (route) => false,
           );
         }
         return;

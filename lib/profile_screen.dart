@@ -145,6 +145,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
         try {
           print('🗑️ Starting deletion from Realtime Database...');
           
+          // IMPORTANT:
+          // Do NOT delete orders when a buyer deletes their account.
+          // Sellers need the order history and points collected from those orders.
+          // We mark them as buyerDeleted instead.
+          try {
+            final ordersRef = dbRef.child('orders');
+            final ordersSnapshot = await ordersRef.orderByChild('userId').equalTo(userId).once();
+            if (ordersSnapshot.snapshot.exists) {
+              final ordersMap = ordersSnapshot.snapshot.value as Map?;
+              if (ordersMap != null) {
+                int markedOrders = 0;
+                for (var key in ordersMap.keys) {
+                  await ordersRef.child(key).child('buyerDeleted').set(true);
+                  await ordersRef.child(key).child('buyerDeletedAt').set(ServerValue.timestamp);
+                  markedOrders++;
+                }
+                print('✅ Marked $markedOrders orders as buyerDeleted (kept for seller)');
+              }
+            }
+          } catch (orderMarkError) {
+            print('⚠️ Error marking orders as buyerDeleted: $orderMarkError');
+          }
+
           // Delete user data
           await dbRef.child('users/$userId').remove();
           print('✅ Deleted user data');
@@ -158,49 +181,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           // Delete user's cart
           await dbRef.child('carts/$userId').remove();
           print('✅ Deleted user cart');
-          
-          // Delete user's orders (by userId)
-          final ordersRef = dbRef.child('orders');
-          final ordersSnapshot = await ordersRef.orderByChild('userId').equalTo(userId).once();
-          if (ordersSnapshot.snapshot.exists) {
-            final ordersMap = ordersSnapshot.snapshot.value as Map?;
-            if (ordersMap != null) {
-              int deletedOrders = 0;
-              for (var key in ordersMap.keys) {
-                await ordersRef.child(key).remove();
-                deletedOrders++;
-              }
-              print('✅ Deleted $deletedOrders orders');
-            }
-          }
-          
-          // Delete point transfers where user is sender or receiver
-          try {
-            final transfersRef = dbRef.child('points_transfers');
-            final transfersSnapshot = await transfersRef.get();
-            if (transfersSnapshot.exists) {
-              final transfersMap = transfersSnapshot.value as Map?;
-              if (transfersMap != null) {
-                int deletedTransfers = 0;
-                for (var key in transfersMap.keys) {
-                  final transfer = transfersMap[key] as Map?;
-                  if (transfer != null) {
-                    final senderId = transfer['senderId']?.toString();
-                    final receiverId = transfer['receiverId']?.toString();
-                    if (senderId == userId || receiverId == userId) {
-                      await transfersRef.child(key).remove();
-                      deletedTransfers++;
-                    }
-                  }
-                }
-                if (deletedTransfers > 0) {
-                  print('✅ Deleted $deletedTransfers transfers');
-                }
-              }
-            }
-          } catch (transferError) {
-            print('⚠️ Error deleting transfers: $transferError');
-          }
           
           print('✅ Completed Realtime Database deletion');
         } catch (dbError) {
