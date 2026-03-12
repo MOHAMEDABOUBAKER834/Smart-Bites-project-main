@@ -23,6 +23,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   List<Map<String, dynamic>> _users = [];
   bool _isLoadingVerifications = true;
   bool _isLoadingUsers = true;
+  String _userSearchQuery = '';
 
   static const Map<String, Map<String, String>> _localizations = {
     'en': {
@@ -60,6 +61,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       'user_deleted': 'User account deleted',
       'points_updated': 'Points updated successfully',
       'no_users': 'No users found',
+      'search_users': 'Search by name, email, school, or ID',
     },
     'ar': {
       'title': 'لوحة تحكم المشرف',
@@ -96,6 +98,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       'user_deleted': 'تم حذف حساب المستخدم',
       'points_updated': 'تم تحديث النقاط بنجاح',
       'no_users': 'لا يوجد مستخدمون',
+      'search_users': 'ابحث بالاسم أو البريد أو المدرسة أو رقم الحساب',
     },
   };
 
@@ -872,77 +875,143 @@ class _AdminDashboardState extends State<AdminDashboard> {
         return (a['name']?.toString() ?? '').compareTo(b['name']?.toString() ?? '');
       });
 
-    return RefreshIndicator(
-      onRefresh: () => _loadUsers(),
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: sortedUsers.length,
-        itemBuilder: (context, index) {
-          final user = sortedUsers[index];
-          final bool isBanned = user['banned'] == true;
+    final query = _userSearchQuery.trim().toLowerCase();
+    final filteredUsers = query.isEmpty
+        ? sortedUsers
+        : sortedUsers.where((user) {
+            final name = (user['name']?.toString() ?? '').toLowerCase();
+            final email = (user['email']?.toString() ?? '').toLowerCase();
+            final school = (user['school']?.toString() ?? '').toLowerCase();
+            final userId = (user['userId']?.toString() ?? '').toLowerCase();
+            return name.contains(query) ||
+                email.contains(query) ||
+                school.contains(query) ||
+                userId.contains(query);
+          }).toList();
 
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            elevation: 2,
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: isBanned ? Colors.red.shade100 : Colors.deepOrange.shade100,
-                child: Icon(
-                  Icons.person,
-                  color: isBanned ? Colors.red.shade700 : Colors.deepOrange,
-                ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: TextField(
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search),
+              hintText: loc['search_users'],
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
               ),
-              title: Text(
-                user['name']?.toString().isNotEmpty == true ? user['name'] as String : user['email'] as String? ?? '',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: isBanned ? Colors.red.shade700 : null,
-                ),
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if ((user['email'] as String?)?.isNotEmpty == true)
-                    Text(user['email'] as String),
-                  Row(
-                    children: [
-                      Text('${loc['role']!}: ${user['role'] ?? ''}'),
-                      const SizedBox(width: 12),
-                      Text('${loc['points']!}: ${user['points'] ?? 0}'),
-                    ],
-                  ),
-                  if ((user['school'] as String?)?.isNotEmpty == true)
-                    Text(user['school'] as String),
-                  if (isBanned)
-                    Text(
-                      loc['ban']!,
-                      style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 12),
-                    ),
-                ],
-              ),
-              trailing: PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'add_points') {
-                    _addPointsToUser(user['userId'] as String, user['name']?.toString() ?? user['email']?.toString() ?? '');
-                  } else if (value == 'ban') {
-                    _toggleBanUser(user['userId'] as String, user['name']?.toString() ?? '', isBanned);
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: 'add_points',
-                    child: Text(loc['add_points']!),
-                  ),
-                  PopupMenuItem(
-                    value: 'ban',
-                    child: Text(isBanned ? loc['unban']! : loc['ban']!),
-                  ),
-                ],
-              ),
+              isDense: true,
             ),
-          );
-        },
-      ),
+            onChanged: (value) {
+              setState(() {
+                _userSearchQuery = value;
+              });
+            },
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () => _loadUsers(),
+            child: filteredUsers.isEmpty
+                ? ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      Center(
+                        child: Text(
+                          loc['no_users']!,
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: filteredUsers.length,
+                    itemBuilder: (context, index) {
+                      final user = filteredUsers[index];
+                      final bool isBanned = user['banned'] == true;
+
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        elevation: 2,
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isBanned ? Colors.red.shade100 : Colors.deepOrange.shade100,
+                            child: Icon(
+                              Icons.person,
+                              color: isBanned ? Colors.red.shade700 : Colors.deepOrange,
+                            ),
+                          ),
+                          title: Text(
+                            user['name']?.toString().isNotEmpty == true
+                                ? user['name'] as String
+                                : user['email'] as String? ?? '',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: isBanned ? Colors.red.shade700 : null,
+                            ),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if ((user['email'] as String?)?.isNotEmpty == true)
+                                Text(user['email'] as String),
+                              Row(
+                                children: [
+                                  Text('${loc['role']!}: ${user['role'] ?? ''}'),
+                                  const SizedBox(width: 12),
+                                  Text('${loc['points']!}: ${user['points'] ?? 0}'),
+                                ],
+                              ),
+                              if ((user['school'] as String?)?.isNotEmpty == true)
+                                Text(user['school'] as String),
+                              if (isBanned)
+                                Text(
+                                  loc['ban']!,
+                                  style: TextStyle(
+                                    color: Colors.red.shade700,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          trailing: PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'add_points') {
+                                _addPointsToUser(
+                                  user['userId'] as String,
+                                  user['name']?.toString() ?? user['email']?.toString() ?? '',
+                                );
+                              } else if (value == 'ban') {
+                                _toggleBanUser(
+                                  user['userId'] as String,
+                                  user['name']?.toString() ?? '',
+                                  isBanned,
+                                );
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              PopupMenuItem(
+                                value: 'add_points',
+                                child: Text(loc['add_points']!),
+                              ),
+                              PopupMenuItem(
+                                value: 'ban',
+                                child: Text(isBanned ? loc['unban']! : loc['ban']!),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ),
+      ],
     );
   }
 
